@@ -77,6 +77,23 @@ jobs:
           }
           SWIFT
           swiftc -O key.swift -o key
+          # Same poster as a tiny app, so it is its own responsible process for TCC.
+          mkdir -p KeyPoster.app/Contents/MacOS
+          cp key KeyPoster.app/Contents/MacOS/KeyPoster
+          /usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string com.gramfix.qa.keyposter' -c 'Add :CFBundleExecutable string KeyPoster' -c 'Add :LSUIElement bool true' KeyPoster.app/Contents/Info.plist
+          codesign -s - --force KeyPoster.app
+          codesign -d -r- KeyPoster.app 2>&1 | sed -n 's/^designated => //p' > kreq.txt
+          csreq -r kreq.txt -b kreq.bin
+          KHEX=$(xxd -p kreq.bin | tr -d '\n')
+          for DB in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
+            for SERVICE in kTCCServiceAccessibility kTCCServicePostEvent; do
+              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, indirect_object_identifier, flags, last_modified) VALUES ('$SERVICE','com.gramfix.qa.keyposter',0,2,3,1,X'$KHEX','UNUSED',0,CAST(strftime('%s','now') AS INTEGER));" || echo "skip $SERVICE in $DB"
+            done
+          done
+          sudo killall -9 tccd || true
+          press() { ./key "$1"; }
+          press_app() { open -W -g -a "$PWD/KeyPoster.app" --args "$1"; }
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select service, client, auth_value from access where client like '%gramfix%'" || true
           open /Applications/Gramfix.app
           sleep 12
           pgrep -fl Gramfix.app
@@ -87,17 +104,23 @@ jobs:
           open -a TextEdit "$SAMPLE"
           sleep 5
           screencapture -x 2-textedit.png || true
-          ./key 0    # Cmd+A
-          sleep 1
-          ./key 14   # Cmd+E, the default Gramfix correction shortcut
+          attempt() {
+            POST=$1
+            $POST 0; sleep 1    # Cmd+A
+            echo -n '' | pbcopy; $POST 8; sleep 1    # Cmd+C proves the keystrokes reach TextEdit
+            echo "[$POST] clipboard after Cmd+A, Cmd+C: $(pbpaste)"
+            $POST 14   # Cmd+E, the default Gramfix correction shortcut
+            for i in $(seq 1 12); do
+              sleep 2
+              $POST 1  # Cmd+S saves the file in place
+              sleep 1
+              TEXT=$(cat "$SAMPLE")
+              if [ "$TEXT" != "this are a example sentence with bad grammer." ]; then return 0; fi
+            done
+            return 1
+          }
           TEXT=""
-          for i in $(seq 1 15); do
-            sleep 2
-            ./key 1  # Cmd+S saves the file in place
-            sleep 1
-            TEXT=$(cat "$SAMPLE")
-            if [ "$TEXT" != "this are a example sentence with bad grammer." ]; then break; fi
-          done
+          attempt press || { screencapture -x 3a-cli-attempt.png || true; attempt press_app || true; }
           screencapture -x 3-after-correction.png || true
           echo "TextEdit now reads: $TEXT"
           echo "$TEXT" > result.txt
