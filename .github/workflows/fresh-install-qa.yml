@@ -30,12 +30,9 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsS https://gramfix.app/release.json | tee release.json
-          python3 - <<'PY'
-          import json, os
-          r = json.load(open('release.json'))
-          assert r['version'] == os.environ['VERSION'], r
-          open(os.environ['GITHUB_ENV'], 'a').write(f"SHA={r['sha256']}\nURL={r['download_url']}\n")
-          PY
+          python3 -c "import json,os; r=json.load(open('release.json')); assert r['version']==os.environ['VERSION'], r"
+          SHA=$(python3 -c "import json; print(json.load(open('release.json'))['sha256'])")
+          URL=$(python3 -c "import json; print(json.load(open('release.json'))['download_url'])")
           curl -fsS -o Gramfix.dmg "$URL"
           echo "$SHA  Gramfix.dmg" | shasum -a 256 -c -
           hdiutil attach -nobrowse -readonly -mountpoint /tmp/gramfix-dmg Gramfix.dmg
