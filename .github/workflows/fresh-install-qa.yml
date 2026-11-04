@@ -1,3 +1,4 @@
+# Manual only (Nir, 2026-11-04: no automatic GitHub Actions). Run it from the Actions tab or `gh workflow run` after a release.
 name: Fresh install QA
 
 # Installs the PUBLISHED installer on a clean macOS runner (no Keychain key, no
@@ -13,8 +14,6 @@ on:
       runner:
         description: macOS runner label (Apple Silicon)
         default: 'macos-14'
-  push:
-    branches: [main]
 
 permissions:
   contents: read
