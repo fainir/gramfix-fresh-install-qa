@@ -82,7 +82,7 @@ jobs:
           cp key KeyPoster.app/Contents/MacOS/KeyPoster
           /usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string com.gramfix.qa.keyposter' -c 'Add :CFBundleExecutable string KeyPoster' -c 'Add :LSUIElement bool true' KeyPoster.app/Contents/Info.plist
           codesign -s - --force KeyPoster.app
-          codesign -d -r- KeyPoster.app 2>&1 | sed -n 's/^designated => //p' > kreq.txt
+          codesign -d -r- KeyPoster.app 2>&1 | sed -n 's/^#* *designated => //p' > kreq.txt; cat kreq.txt
           csreq -r kreq.txt -b kreq.bin
           KHEX=$(xxd -p kreq.bin | tr -d '\n')
           for DB in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
