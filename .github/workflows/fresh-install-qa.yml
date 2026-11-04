@@ -67,14 +67,20 @@ jobs:
           cat > key.swift <<'SWIFT'
           import CoreGraphics
           import Foundation
+          // Like a physical keyboard: Command down, key down/up with the Command flag, Command up.
           let code = CGKeyCode(Int(CommandLine.arguments[1])!)
+          let command = CGKeyCode(55)
           let source = CGEventSource(stateID: .hidSystemState)
-          for down in [true, false] {
-              let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)!
-              event.flags = .maskCommand
+          func post(_ key: CGKeyCode, _ down: Bool, _ flags: CGEventFlags) {
+              let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)!
+              event.flags = flags
               event.post(tap: .cghidEventTap)
               usleep(60_000)
           }
+          post(command, true, .maskCommand)
+          post(code, true, .maskCommand)
+          post(code, false, .maskCommand)
+          post(command, false, [])
           SWIFT
           swiftc -O key.swift -o key
           # Same poster as a tiny app, so it is its own responsible process for TCC.
