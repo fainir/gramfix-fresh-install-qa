@@ -1,0 +1,122 @@
+name: Fresh install QA
+
+# Installs the PUBLISHED installer on a clean macOS runner (no Keychain key, no
+# preferences, nothing configured), corrects a sentence in TextEdit with the
+# real global shortcut and reads the text back. Uses at most one
+# included request from the capped shared allowance per run.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published version to install
+        default: '1.0.4'
+      runner:
+        description: macOS runner label (Apple Silicon)
+        default: 'macos-14'
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fresh-install:
+    runs-on: ${{ inputs.runner || 'macos-14' }}
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ inputs.version || '1.0.4' }}
+    steps:
+      - name: Download the published installer and check it against release.json
+        run: |
+          set -euo pipefail
+          curl -fsS https://gramfix.app/release.json | tee release.json
+          python3 - <<'PY'
+          import json, os
+          r = json.load(open('release.json'))
+          assert r['version'] == os.environ['VERSION'], r
+          open(os.environ['GITHUB_ENV'], 'a').write(f"SHA={r['sha256']}\nURL={r['download_url']}\n")
+          PY
+          curl -fsS -o Gramfix.dmg "$URL"
+          echo "$SHA  Gramfix.dmg" | shasum -a 256 -c -
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/gramfix-dmg Gramfix.dmg
+          ditto /tmp/gramfix-dmg/Gramfix.app /Applications/Gramfix.app
+          hdiutil detach /tmp/gramfix-dmg
+          /usr/sbin/spctl --assess --type execute -vv /Applications/Gramfix.app
+          defaults read /Applications/Gramfix.app/Contents/Info CFBundleShortVersionString
+          defaults read /Applications/Gramfix.app/Contents/Info CFBundleVersion
+
+      - name: Confirm this Mac is fresh (no saved key, no preferences)
+        run: |
+          if security find-generic-password -s com.gramfix.app.openai -a api-key >/dev/null 2>&1; then echo 'A key exists'; exit 1; fi
+          test ! -e "$HOME/Library/Application Support/Gramfix/gramfix_config.json"
+          echo 'No Gramfix key in Keychain and no preferences file.'
+
+      - name: Grant Accessibility and Input Monitoring on the runner
+        run: |
+          set -euo pipefail
+          codesign -d -r- /Applications/Gramfix.app 2>&1 | sed -n 's/^designated => //p' > req.txt
+          csreq -r req.txt -b req.bin
+          HEX=$(xxd -p req.bin | tr -d '\n')
+          for DB in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
+            for SERVICE in kTCCServiceAccessibility kTCCServiceListenEvent; do
+              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, indirect_object_identifier, flags, last_modified) VALUES ('$SERVICE','com.gramfix.app',0,2,3,1,X'$HEX','UNUSED',0,CAST(strftime('%s','now') AS INTEGER));" || echo "skip $SERVICE in $DB"
+            done
+          done
+          sudo killall -9 tccd || true
+
+      - name: Launch Gramfix and correct a sentence in TextEdit with Cmd+E
+        run: |
+          set -euo pipefail
+          cat > key.swift <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let code = CGKeyCode(Int(CommandLine.arguments[1])!)
+          let source = CGEventSource(stateID: .hidSystemState)
+          for down in [true, false] {
+              let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)!
+              event.flags = .maskCommand
+              event.post(tap: .cghidEventTap)
+              usleep(60_000)
+          }
+          SWIFT
+          swiftc -O key.swift -o key
+          open /Applications/Gramfix.app
+          sleep 12
+          pgrep -fl Gramfix.app
+          screencapture -x 1-launched.png || true
+          osascript -e 'tell application "TextEdit" to make new document with properties {text:"this are a example sentence with bad grammer."}' -e 'tell application "TextEdit" to activate'
+          sleep 3
+          ./key 0    # Cmd+A
+          sleep 1
+          ./key 14   # Cmd+E, the default Gramfix correction shortcut
+          for i in $(seq 1 30); do
+            TEXT=$(osascript -e 'tell application "TextEdit" to get text of document 1')
+            if [ "$TEXT" != "this are a example sentence with bad grammer." ]; then break; fi
+            sleep 1
+          done
+          screencapture -x 2-after-correction.png || true
+          echo "TextEdit now reads: $TEXT"
+          echo "$TEXT" > result.txt
+          python3 - <<'PY'
+          t = open('result.txt').read().strip()
+          assert t != 'this are a example sentence with bad grammer.', 'Text was not corrected'
+          assert 'grammar' in t and 'is' in t.lower(), t
+          print('PASS: fresh install corrected text with no key saved')
+          PY
+
+      - name: Collect evidence
+        if: always()
+        run: |
+          cp "$HOME/Library/Logs/gramfix.log" . 2>/dev/null || echo 'no error log' > gramfix.log
+          python3 -c "import json,os;d=json.load(open(os.path.expanduser('~/Library/Application Support/Gramfix/gramfix_config.json')));print({k:d[k] for k in d if k!='shortcuts'})" || true
+          security find-generic-password -s com.gramfix.app.openai -a api-key >/dev/null 2>&1 && echo 'key present' || echo 'still no key saved'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fresh-install-evidence
+          path: |
+            *.png
+            result.txt
+            release.json
+            gramfix.log
