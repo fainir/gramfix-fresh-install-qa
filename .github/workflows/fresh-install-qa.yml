@@ -81,17 +81,24 @@ jobs:
           sleep 12
           pgrep -fl Gramfix.app
           screencapture -x 1-launched.png || true
-          osascript -e 'tell application "TextEdit" to make new document with properties {text:"this are a example sentence with bad grammer."}' -e 'tell application "TextEdit" to activate'
-          sleep 3
+          # No AppleScript (the runner may not send Apple Events): open a plain-text file, correct, save, read the file.
+          SAMPLE="$RUNNER_TEMP/sample.txt"
+          printf 'this are a example sentence with bad grammer.' > "$SAMPLE"
+          open -a TextEdit "$SAMPLE"
+          sleep 5
+          screencapture -x 2-textedit.png || true
           ./key 0    # Cmd+A
           sleep 1
           ./key 14   # Cmd+E, the default Gramfix correction shortcut
-          for i in $(seq 1 30); do
-            TEXT=$(osascript -e 'tell application "TextEdit" to get text of document 1')
-            if [ "$TEXT" != "this are a example sentence with bad grammer." ]; then break; fi
+          TEXT=""
+          for i in $(seq 1 15); do
+            sleep 2
+            ./key 1  # Cmd+S saves the file in place
             sleep 1
+            TEXT=$(cat "$SAMPLE")
+            if [ "$TEXT" != "this are a example sentence with bad grammer." ]; then break; fi
           done
-          screencapture -x 2-after-correction.png || true
+          screencapture -x 3-after-correction.png || true
           echo "TextEdit now reads: $TEXT"
           echo "$TEXT" > result.txt
           python3 - <<'PY'
